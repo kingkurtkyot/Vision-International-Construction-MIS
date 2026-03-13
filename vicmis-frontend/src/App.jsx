@@ -1,5 +1,4 @@
 import React, { useState, useCallback } from 'react';
-import api from './api/axios'; 
 import Sidebar from './components/Sidebar.jsx';
 import Header from './components/Header.jsx';
 import Project from './components/Modules/project/Project.jsx';
