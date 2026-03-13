@@ -1,13 +1,17 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '@/api/axios'; 
 import './css/Customer.css';
 
 const Customer = ({ user }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isTrashOpen, setIsTrashOpen] = useState(false); 
+  const [isViewOnly, setIsViewOnly] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
+  
   const [leads, setLeads] = useState([]);
+  const [trashedLeads, setTrashedLeads] = useState([]); 
   const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
 
   const [formData, setFormData] = useState({
     clientName: '',
@@ -19,6 +23,17 @@ const Customer = ({ user }) => {
     salesRep: user?.name || ''
   });
 
+  // Hide Hamburger Menu when any Modal is open
+  useEffect(() => {
+    if (isModalOpen || isHistoryOpen || isTrashOpen) {
+      document.body.classList.add('hide-hamburger');
+    } else {
+      document.body.classList.remove('hide-hamburger');
+    }
+    return () => document.body.classList.remove('hide-hamburger');
+  }, [isModalOpen, isHistoryOpen, isTrashOpen]);
+
+  // Sync form data
   useEffect(() => {
     if (selectedLead) {
       setFormData({
@@ -28,19 +43,16 @@ const Customer = ({ user }) => {
         contactNo: selectedLead.contact_no || '',
         notes: selectedLead.notes || '',
         status: selectedLead.status || 'To be Contacted',
-        salesRep: selectedLead.sales_rep?.name || user?.name
+        salesRep: selectedLead.sales_rep?.name || user?.name || ''
       });
     } else {
-      setFormData(prev => ({
-        ...prev,
-        clientName: '', projectName: '', location: '', contactNo: '', notes: '',
-        status: 'To be Contacted',
-        salesRep: user?.name || ''
-      }));
+      setFormData({
+        clientName: '', projectName: '', location: '', contactNo: '', notes: '', status: 'To be Contacted', salesRep: user?.name || ''
+      });
     }
   }, [selectedLead, isModalOpen, user]);
 
-  const fetchLeads = useCallback(async () => {
+  const fetchLeads = async () => {
     try {
       setIsLoading(true);
       const res = await api.get('/leads');
@@ -50,22 +62,48 @@ const Customer = ({ user }) => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  };
 
-  useEffect(() => { fetchLeads(); }, [fetchLeads]);
+  const fetchTrashedLeads = async () => {
+    try {
+      const res = await api.get('/leads/trash/all');
+      setTrashedLeads(res.data);
+    } catch (err) {
+      console.error("Error fetching trash:", err);
+    }
+  };
+
+  useEffect(() => { 
+    fetchLeads(); 
+  }, []);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData({ ...formData, [name]: value });
+    if (name === 'contactNo') {
+      const onlyNumbers = value.replace(/\D/g, '');
+      setFormData(prev => ({ ...prev, [name]: onlyNumbers.slice(0, 11) }));
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
   };
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setSelectedLead(null);
+    setIsViewOnly(false);
+  };
+
+  const handleViewHistoryDetails = (proj) => {
+    setSelectedLead(proj);
+    setIsViewOnly(true);
+    setIsHistoryOpen(false); 
+    setIsModalOpen(true);    
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isViewOnly) return; 
+
     const payload = {
       client_name: formData.clientName,
       project_name: formData.projectName,
@@ -78,7 +116,7 @@ const Customer = ({ user }) => {
     try {
       if (selectedLead) {
         const res = await api.put(`/leads/${selectedLead.id}`, payload);
-        setLeads(leads.map(l => l.id === selectedLead.id ? res.data : l));
+        setLeads(prev => prev.map(l => l.id === selectedLead.id ? res.data : l));
         alert("Lead updated!");
       } else {
         const res = await api.post('/leads', payload);
@@ -87,84 +125,100 @@ const Customer = ({ user }) => {
       }
       handleCloseModal();
     } catch (err) {
-      alert("Action failed. Check console.");
+      console.error("Submit error:", err);
+      alert("Action failed.");
     }
   };
 
   const handleDelete = async () => {
-    if (window.confirm("Delete this lead permanently?")) {
-      try {
-        await api.delete(`/leads/${selectedLead.id}`);
-        setLeads(leads.filter(l => l.id !== selectedLead.id));
-        handleCloseModal();
-      } catch (err) {
-        alert("Delete failed.");
-      }
+    if (!window.confirm("Move this lead to the trash bin?")) return;
+    try {
+      await api.delete(`/leads/${selectedLead.id}`);
+      setLeads(prev => prev.filter(l => l.id !== selectedLead.id));
+      handleCloseModal();
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert("Delete failed.");
     }
   };
 
-  // --- NEW FUNCTION: Handle Project Creation ---
+  const handleRestore = async (id) => {
+    try {
+      await api.put(`/leads/${id}/restore`);
+      setTrashedLeads(prev => prev.filter(l => l.id !== id));
+      fetchLeads();
+      alert("Lead restored!");
+    } catch (err) {
+      console.error("Restore error:", err);
+      alert("Failed to restore.");
+    }
+  };
+
+  const handleForceDelete = async (id) => {
+    if (!window.confirm("Delete permanently? This cannot be undone.")) return;
+    try {
+      await api.delete(`/leads/${id}/force`);
+      setTrashedLeads(prev => prev.filter(l => l.id !== id));
+      alert("Deleted forever.");
+    } catch (err) {
+      console.error("Force delete error:", err);
+      alert("Permanent delete failed.");
+    }
+  };
+
   const handleCreateProject = async (e, lead) => {
-    e.stopPropagation(); // Prevents the edit modal from opening when clicking the button
-    
-    if (window.confirm(`Are you sure you want to create a construction project for ${lead.project_name}?`)) {
+    e.stopPropagation(); 
+    if (window.confirm(`Create project for ${lead.project_name}?`)) {
       try {
-        // 1. Send data to your Projects table/endpoint
-        // Adjust the payload fields based on what your backend expects for a "Project"
         const projectPayload = {
           lead_id: lead.id,
           project_name: lead.project_name,
           client_name: lead.client_name,
           location: lead.location,
-          project_type: 'Construction Project', // Tagging it as requested
+          project_type: 'Construction Project',
           status: 'Ongoing' 
         };
         await api.post('/projects', projectPayload); 
-
-        // 2. Update the lead's status so the button disappears
-        const updatedLeadPayload = { ...lead, status: 'Project Created' };
-        await api.put(`/leads/${lead.id}`, updatedLeadPayload);
-
-        // 3. Refresh the UI
-        alert(`Project "${lead.project_name}" successfully created! You can now view it in the Project module.`);
+        await api.put(`/leads/${lead.id}`, { ...lead, status: 'Project Created' });
+        alert(`Project created!`);
         fetchLeads(); 
-
       } catch (err) {
-        console.error("Project creation failed:", err);
-        alert("Failed to create project. Please check your backend connections.");
+        console.error("Project error:", err);
+        alert("Failed to create project.");
       }
     }
   };
 
-  const filteredLeads = useMemo(() => {
-    return leads.filter(l => 
-      l.client_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      l.project_name?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [leads, searchTerm]);
+  // Lists filtered for display
+  const activeLeads = leads.filter(l => l.status !== 'Project Created');
+  const completedProjects = leads.filter(l => l.status === 'Project Created');
 
   return (
     <div className="customer-container">
       <div className="customer-header">
         <h1>Client Management</h1>
-        <div className="search-bar-wrapper">
-          <input 
-            type="text" 
-            placeholder="Search leads..." 
-            className="search-input-field"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+        <div className="header-actions">
+          <button className="btn-cancel" onClick={() => { fetchTrashedLeads(); setIsTrashOpen(true); }}>
+            🗑️ Trash Bin
+          </button>
+          <button className="btn-add-lead" onClick={() => { setIsViewOnly(false); setIsModalOpen(true); }}>
+            + Add New Lead
+          </button>
         </div>
-        <button className="btn-add-lead" onClick={() => setIsModalOpen(true)}>+ Add New Lead</button>
       </div>
 
       <div className="lead-grid">
         {isLoading ? (
           <div className="spinner-container"><div className="loading-circle"></div></div>
+        ) : activeLeads.length === 0 ? (
+          <div className="no-leads-container">
+            <div className="no-leads-icon">📋</div>
+            <h3>No Active Leads</h3>
+            <p>Your pipeline is clear. Start by adding a new lead.</p>
+          </div>
         ) : (
-          filteredLeads.map((lead) => (
-            <div key={lead.id} className="lead-card" onClick={() => { setSelectedLead(lead); setIsModalOpen(true); }}>
+          activeLeads.map((lead) => (
+            <div key={lead.id} className="lead-card" onClick={() => { setSelectedLead(lead); setIsViewOnly(false); setIsModalOpen(true); }}>
               <div className="lead-card-header">
                 <span className={`status-badge ${lead.status.replace(/\s+/g, '-').toLowerCase()}`}>{lead.status}</span>
                 <span className="lead-id">#{lead.id}</span>
@@ -174,15 +228,11 @@ const Customer = ({ user }) => {
                 <p>{lead.project_name}</p>
                 <small>📍 {lead.location}</small>
               </div>
-              
-              {/* Updated Footer Area to accommodate the new button */}
               <div className="lead-card-footer">
                 <div className="lead-click-hint">Click to View/Edit</div>
-                
-                {/* --- NEW BUTTON: Only shows if status is Ready --- */}
-                {lead.status === 'Ready for Creating Project' && 
-                (<button className="btn-create-project" onClick={(e) => 
-                  handleCreateProject(e, lead)}> Create Project 
+                {lead.status === 'Ready for Creating Project' && (
+                  <button className="btn-create-project" onClick={(e) => handleCreateProject(e, lead)}> 
+                    Create Project 
                   </button>
                 )}
               </div>
@@ -191,65 +241,104 @@ const Customer = ({ user }) => {
         )}
       </div>
 
+      {/* --- MAIN MODAL --- */}
       {isModalOpen && (
         <div className="modal-overlay">
           <div className="modal-content compact-modal">
             <div className="modal-header-compact">
-              <h2>{selectedLead ? `Update Lead: ${formData.clientName}` : 'New Lead Entry'}</h2>
+              <h2>{isViewOnly ? `Project Details` : selectedLead ? `Update Lead` : 'New Lead Entry'}</h2>
             </div>
             <form onSubmit={handleSubmit} className="lead-form-compact">
               <div className="compact-grid">
-                <div className="form-group-compact">
-                  <label>Client Name</label>
-                  <input type="text" name="clientName" value={formData.clientName} onChange={handleInputChange} required />
-                </div>
-                <div className="form-group-compact">
-                  <label>Project Name</label>
-                  <input type="text" name="projectName" value={formData.projectName} onChange={handleInputChange} required />
-                </div>
-                <div className="form-group-compact">
-                  <label>Location</label>
-                  <input type="text" name="location" value={formData.location} onChange={handleInputChange} required />
-                </div>
-                <div className="form-group-compact">
-                  <label>Contact Number</label>
-                  <input type="text" name="contactNo" value={formData.contactNo} onChange={handleInputChange} required />
-                </div>
-                <div className="form-group-compact">
-                  <label>Sales Representative</label>
-                  <input type="text" value={formData.salesRep} readOnly className="locked-input-field" />
-                </div>
+                <div className="form-group-compact"><label>Client Name</label><input type="text" name="clientName" value={formData.clientName} onChange={handleInputChange} required disabled={isViewOnly} /></div>
+                <div className="form-group-compact"><label>Project Name</label><input type="text" name="projectName" value={formData.projectName} onChange={handleInputChange} required disabled={isViewOnly} /></div>
+                <div className="form-group-compact"><label>Location</label><input type="text" name="location" value={formData.location} onChange={handleInputChange} required disabled={isViewOnly} /></div>
+                <div className="form-group-compact"><label>Contact Number</label><input type="text" name="contactNo" value={formData.contactNo} onChange={handleInputChange} maxLength="11" required disabled={isViewOnly} /></div>
+                <div className="form-group-compact"><label>Sales Rep</label><input type="text" value={formData.salesRep} readOnly className="locked-input-field" /></div>
                 <div className="form-group-compact">
                   <label>Status</label>
-                  <select name="status" value={formData.status} onChange={handleInputChange}>
+                  <select name="status" value={formData.status} onChange={handleInputChange} disabled={isViewOnly}>
                     <option value="To be Contacted">To be Contacted</option>
                     <option value="Contacted">Contacted</option>
                     <option value="For Presentation">For Presentation</option>
                     <option value="Ready for Creating Project">Ready for Creating Project</option>
-                    {/* Added a new status so you can mark it completed later */}
-                    <option value="Project Created">Project Created</option> 
+                    {formData.status === 'Project Created' && <option value="Project Created">Project Created</option>}
                   </select>
                 </div>
-                <div className="form-group-compact full-width">
-                  <label>Notes</label>
-                  <textarea name="notes" value={formData.notes} onChange={handleInputChange}></textarea>
-                </div>
+                <div className="form-group-compact full-width"><label>Notes</label><textarea name="notes" value={formData.notes} onChange={handleInputChange} disabled={isViewOnly}></textarea></div>
               </div>
               <div className="modal-footer-compact">
-                {selectedLead && (
-                  <button type="button" className="btn-delete" onClick={handleDelete}>Delete</button>
-                )}
+                {!isViewOnly && selectedLead && <button type="button" className="btn-delete" onClick={handleDelete}>Move to Trash</button>}
                 <div className="footer-right">
-                  <button type="button" className="btn-cancel" onClick={handleCloseModal}>Cancel</button>
-                  <button type="submit" className="btn-save-lead">
-                    {selectedLead ? 'Save Changes' : 'Save Lead'}
-                  </button>
+                  <button type="button" className="btn-cancel" onClick={handleCloseModal}>{isViewOnly ? 'Close' : 'Cancel'}</button>
+                  {!isViewOnly && <button type="submit" className="btn-save-lead">Save</button>}
                 </div>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* --- TRASH BIN MODAL --- */}
+      {isTrashOpen && (
+        <div className="modal-overlay">
+          <div className="compact-modal" style={{ maxWidth: '700px' }}>
+            <div className="modal-header-compact"><h2>🗑️ Trash Bin</h2></div>
+            <div className="history-list">
+              {trashedLeads.length === 0 ? (
+                <p style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>Trash is empty.</p>
+              ) : (
+                trashedLeads.map(lead => (
+                  <div key={lead.id} className="history-item">
+                    <div className="history-item-content">
+                      <div className="history-item-title">{lead.project_name}</div>
+                      <div className="history-item-client">Client: {lead.client_name}</div>
+                    </div>
+                    <div className="trash-item-actions">
+                      <button className="btn-restore" onClick={() => handleRestore(lead.id)}>Restore</button>
+                      <button className="btn-delete" style={{ padding: '8px 12px' }} onClick={() => handleForceDelete(lead.id)}>Delete Forever</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="modal-footer-compact" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn-cancel" onClick={() => setIsTrashOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- HISTORY MODAL --- */}
+      {isHistoryOpen && (
+        <div className="modal-overlay">
+          <div className="compact-modal">
+            <div className="modal-header-compact"><h2>Created Projects History</h2></div>
+            <div className="history-list">
+              {completedProjects.length === 0 ? (
+                <p style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>No history found.</p>
+              ) : (
+                completedProjects.map(proj => (
+                  <div key={proj.id} className="history-item" onClick={() => handleViewHistoryDetails(proj)}>
+                    <div className="history-item-content">
+                        <div className="history-item-title">{proj.project_name}</div>
+                        <div className="history-item-client">Client: {proj.client_name}</div>
+                        <div className="history-item-location">📍 {proj.location}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="modal-footer-compact" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn-cancel" onClick={() => setIsHistoryOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="floating-history-btn" onClick={() => setIsHistoryOpen(true)}>
+        <span>📂</span> Created Projects ({completedProjects.length})
+      </div>
     </div>
   );
 };
