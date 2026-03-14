@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import api from '../api/axios';
+import api from '@/api/axios';
 import './Login.css';
 
 const Login = ({ onEnterSystem }) => {
@@ -83,7 +83,6 @@ const Login = ({ onEnterSystem }) => {
 
             {/* ── Login card — no logo inside, just the form ── */}
             <div className="login-box">
-                {/* Small label at top of card */}
                 <p className="card-system-label">
                     {show2FA ? 'Security Verification' : 'Management Information System'}
                 </p>
@@ -126,8 +125,10 @@ const Login = ({ onEnterSystem }) => {
                         </>
                     ) : (
                         <div className="input-group">
-                            <label style={{ textAlign: 'center', display: 'block' }}>Enter 6-Digit Code</label>
-                            <div className="timer-display" style={{ textAlign: 'center' }}>
+                            <label style={{ textAlign: 'center', display: 'block' }}>
+                                Enter 6-Digit Code
+                            </label>
+                            <div className="timer-display">
                                 Expires in:{' '}
                                 <span className={timeLeft < 10 ? 'urgent' : ''}>
                                     {timeLeft}s
@@ -146,7 +147,11 @@ const Login = ({ onEnterSystem }) => {
                             />
                             <div className="resend-container">
                                 {canResend ? (
-                                    <button type="button" className="resend-btn" onClick={handleLogin}>
+                                    <button
+                                        type="button"
+                                        className="resend-btn"
+                                        onClick={handleLogin}
+                                    >
                                         Resend Code
                                     </button>
                                 ) : (
